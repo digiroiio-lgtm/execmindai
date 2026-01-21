@@ -20,14 +20,16 @@ export class PlannerAgent extends BaseAgent {
     });
 
     const mission = `${input.intent} (${input.priorities.join(', ')})`;
+    const toStringArray = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
     const task: TaskItem = {
       taskId: randomUUID(),
       decisionId: this.context.decisionId,
       mission,
       dueAt: input.windowHint,
       priority: 'normal',
-      relatedPeople: this.context.metadata?.relatedPeople ?? [],
-      contextTags: this.context.metadata?.contextTags ?? [],
+      relatedPeople: toStringArray(this.context.metadata?.relatedPeople),
+      contextTags: toStringArray(this.context.metadata?.contextTags),
       followUpNeeded: true
     };
 

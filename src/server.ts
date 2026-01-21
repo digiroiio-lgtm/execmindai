@@ -276,14 +276,14 @@ app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, Su
       logId: makeId('beh'),
       suggestionId: suggestion.suggestionId,
       decisionId: suggestion.relatedDecisionId,
-      timeHorizon: suggestion.timeHorizon,
-      decisionType: suggestion.decisionType,
+      timeHorizon: suggestion.timeHorizon as DecisionBehaviorLog['timeHorizon'],
+      decisionType: suggestion.decisionType as DecisionBehaviorLog['decisionType'],
       latencyMs,
       userOutcome: outcome,
       followUpCompleted: outcome === 'accepted',
       agentSuggestionOrigin: suggestion.triggerRule
     });
-    await writeStore(STORES.behaviorLog, behaviorLog);
+    await writeStore(LOG_STORES.behaviorLog, behaviorLog);
 
     res.json({ suggestionId: suggestion.suggestionId, outcome, silenceUntil: newSilence });
   } catch (err) {

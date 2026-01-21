@@ -69,6 +69,7 @@ export interface TaskItem {
 
 export interface DecisionBehaviorLog {
   logId: string;
+  suggestionId: string;
   decisionId: string;
   timeHorizon: 'short' | 'medium' | 'long';
   decisionType: 'meeting' | 'task' | 'reminder' | 'context';

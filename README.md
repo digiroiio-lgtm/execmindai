@@ -42,6 +42,10 @@ This service is built with Express (`npm start`) and keeps JSON-backed stores in
 * The config loader feeds every runtime behavior: server port, timeouts, LLM provider, suggestion budgeting, momentum tuning, and feature flags for the background agent and suggestion broadcast.
 * The assistant agent and feedback handler read from this config (`config.featureFlags`, `config.suggestion.*`, etc.) before sending notifications or updating `silenceUntil`, ensuring environment-specific policies are respected.
 
+## Privacy boundary
+
+ExecMindAI never persists raw inputs (voice or text) beyond the parser stage. Only structured metadata (time hints, decision status, context tags, anonymized summaries) is written into `data/*.json`, and those stores are strictly described in `data/README.md`. This keeps the memory/logging layer compliant with enterprise privacy expectations while still enabling decision intelligence.
+
 ## Decision logging
 
 ExecMindAI logs decision behavior (time horizon, type, latency, accept/delay/ignore, follow-up completion) while avoiding raw personal text or sensitive detail. This becomes strategic intelligence without violating privacy.
