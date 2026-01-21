@@ -9,5 +9,6 @@
     "forceConsistentCasingInFileNames": true,
     "sourceMap": false
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*"],
+  "allowJs": true
 }

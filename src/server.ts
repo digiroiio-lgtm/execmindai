@@ -1,7 +1,7 @@
-const express = require('express');
-const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
+import cors from 'cors';
+import express, { NextFunction, Request, Response } from 'express';
+import { promises as fs } from 'fs';
+import path from 'path';
 
 const app = express();
 app.use(cors());
@@ -13,17 +13,70 @@ const STORES = {
   contextStore: path.join(DATA_DIR, 'context_store.json'),
   suggestionLog: path.join(DATA_DIR, 'suggestion_log.json'),
   behaviorLog: path.join(DATA_DIR, 'decision_behavior_log.json')
-};
+} as const;
 
-const suggestionClients = new Set();
+type StoreKey = keyof typeof STORES;
+
+const suggestionClients = new Set<Response>();
+
+interface SuggestionLogEntry {
+  suggestionId: string;
+  relatedDecisionId: string;
+  contextTags: string[];
+  suggestionText: string;
+  toneHint: string;
+  ctaOptions: string[];
+  triggerRule: string;
+  confidence: number;
+  syncAction: string | null;
+  decisionType: string;
+  timeHorizon: string;
+  deliveredAt: string;
+  outcome: 'accepted' | 'delayed' | 'ignored' | null;
+  feedbackAt: string | null;
+  delaySpan: 'short' | 'medium' | 'long' | null;
+  silenceUntil: string | null;
+}
+
+interface ContextEntry {
+  contextTag: string;
+  lastMentionedAt: string;
+  relatedDecisions: string[];
+  momentumScore: number;
+  travelStatus: null | { location: string; startAt: string; endAt: string };
+  silenceUntil: string | null;
+  suggestionHistory: Array<{ suggestionId: string; sentAt: string }>;
+}
+
+interface DecisionRecord {
+  decisionId: string;
+  createdAt: string;
+  hasActiveSuggestion?: boolean;
+  lastSuggestionId?: string;
+  lastSuggestionOutcome?: string;
+}
+
+interface BehaviorLogEntry {
+  logId: string;
+  suggestionId: string;
+  decisionId: string;
+  timeHorizon: string;
+  decisionType: string;
+  latencyMs: number;
+  userOutcome: 'accepted' | 'delayed' | 'ignored';
+  followUpCompleted: boolean;
+  agentSuggestionOrigin: string;
+}
+
+const nowIso = () => new Date().toISOString();
 
 async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   for (const file of Object.values(STORES)) {
     try {
       await fs.access(file);
-    } catch (err) {
-      if (err.code === 'ENOENT') {
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'code' in err && (err as any).code === 'ENOENT') {
         await fs.writeFile(file, '[]', 'utf-8');
       } else {
         throw err;
@@ -32,43 +85,41 @@ async function ensureDataFiles() {
   }
 }
 
-async function readStore(storePath) {
+async function readStore<T>(storePath: string): Promise<T[]> {
   const raw = await fs.readFile(storePath, 'utf-8');
-  return JSON.parse(raw);
+  return JSON.parse(raw) as T[];
 }
 
-async function writeStore(storePath, data) {
+async function writeStore<T>(storePath: string, data: T[]) {
   await fs.writeFile(storePath, JSON.stringify(data, null, 2), 'utf-8');
 }
-
-const nowIso = () => new Date().toISOString();
 
 function makeId(prefix = 'id') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function minutesForSpan(span) {
-  const mapping = {
+function minutesForSpan(span?: 'short' | 'medium' | 'long') {
+  const mapping: Record<'short' | 'medium' | 'long', number> = {
     short: 15,
     medium: 60,
     long: 240
   };
-  return mapping[span] || mapping.short;
+  return mapping[span ?? 'short'];
 }
 
-async function broadcastSuggestion(payload) {
+async function broadcastSuggestion(payload: SuggestionLogEntry) {
   const data = JSON.stringify(payload);
   for (const res of suggestionClients) {
     res.write(`data: ${data}\n\n`);
   }
 }
 
-async function updateContextStore(contextTags, suggestionId, relatedDecisionId) {
-  if (!contextTags || contextTags.length === 0) {
+async function updateContextStore(contextTags: string[], suggestionId: string, relatedDecisionId: string) {
+  if (!contextTags.length) {
     return;
   }
 
-  const store = await readStore(STORES.contextStore);
+  const store = await readStore<ContextEntry>(STORES.contextStore);
   const now = nowIso();
 
   contextTags.forEach((tag) => {
@@ -92,18 +143,19 @@ async function updateContextStore(contextTags, suggestionId, relatedDecisionId) 
       context.relatedDecisions.push(relatedDecisionId);
     }
 
-    context.suggestionHistory = (context.suggestionHistory || []).filter((item) => {
+    context.suggestionHistory = context.suggestionHistory.filter((item) => {
       const age = Date.now() - new Date(item.sentAt).getTime();
       return age <= 48 * 60 * 60 * 1000;
     });
+
     context.suggestionHistory.push({ suggestionId, sentAt: now });
   });
 
   await writeStore(STORES.contextStore, store);
 }
 
-async function markDecisionForSuggestion(decisionId, suggestionId) {
-  const records = await readStore(STORES.decisionRecords);
+async function markDecisionForSuggestion(decisionId: string, suggestionId: string) {
+  const records = await readStore<DecisionRecord>(STORES.decisionRecords);
   let record = records.find((entry) => entry.decisionId === decisionId);
   if (!record) {
     record = {
@@ -120,8 +172,8 @@ async function markDecisionForSuggestion(decisionId, suggestionId) {
   await writeStore(STORES.decisionRecords, records);
 }
 
-async function clearActiveSuggestion(decisionId, outcome) {
-  const records = await readStore(STORES.decisionRecords);
+async function clearActiveSuggestion(decisionId: string, outcome: string) {
+  const records = await readStore<DecisionRecord>(STORES.decisionRecords);
   const record = records.find((entry) => entry.decisionId === decisionId);
   if (record) {
     record.hasActiveSuggestion = false;
@@ -130,16 +182,17 @@ async function clearActiveSuggestion(decisionId, outcome) {
   await writeStore(STORES.decisionRecords, records);
 }
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: nowIso() });
 });
 
-app.get('/events', (req, res) => {
+app.get('/events', (req: Request, res: Response) => {
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive'
   });
+  req.socket.setKeepAlive(true);
   res.flushHeaders && res.flushHeaders();
   res.write('retry: 10000\n\n');
 
@@ -149,7 +202,20 @@ app.get('/events', (req, res) => {
   });
 });
 
-app.post('/suggestions', async (req, res) => {
+interface SuggestionRequestBody {
+  relatedDecisionId: string;
+  contextTags?: string[];
+  suggestionText: string;
+  toneHint?: string;
+  ctaOptions?: string[];
+  triggerRule?: string;
+  confidence?: number;
+  syncAction?: string | null;
+  decisionType?: string;
+  timeHorizon?: string;
+}
+
+app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res: Response) => {
   try {
     const {
       relatedDecisionId,
@@ -170,7 +236,7 @@ app.post('/suggestions', async (req, res) => {
 
     const suggestionId = makeId('sug');
     const deliveredAt = nowIso();
-    const entry = {
+    const entry: SuggestionLogEntry = {
       suggestionId,
       relatedDecisionId,
       contextTags,
@@ -189,27 +255,14 @@ app.post('/suggestions', async (req, res) => {
       silenceUntil: null
     };
 
-    const log = await readStore(STORES.suggestionLog);
+    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
     log.push(entry);
     await writeStore(STORES.suggestionLog, log);
 
     await updateContextStore(contextTags, suggestionId, relatedDecisionId);
     await markDecisionForSuggestion(relatedDecisionId, suggestionId);
 
-    await broadcastSuggestion({
-      suggestionId,
-      relatedDecisionId,
-      contextTags,
-      suggestionText,
-      toneHint,
-      ctaOptions,
-      triggerRule,
-      confidence,
-      syncAction,
-      decisionType,
-      timeHorizon,
-      deliveredAt
-    });
+    await broadcastSuggestion(entry);
 
     res.status(201).json({ suggestionId, deliveredAt });
   } catch (err) {
@@ -218,14 +271,16 @@ app.post('/suggestions', async (req, res) => {
   }
 });
 
-app.post('/suggestions/:id/feedback', async (req, res) => {
+interface SuggestionFeedbackBody {
+  outcome: 'accepted' | 'delayed' | 'ignored';
+  delaySpan?: 'short' | 'medium' | 'long';
+}
+
+app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, SuggestionFeedbackBody>, res: Response) => {
   try {
     const { outcome, delaySpan } = req.body;
-    if (!['accepted', 'delayed', 'ignored'].includes(outcome)) {
-      return res.status(400).json({ error: 'invalid outcome' });
-    }
 
-    const log = await readStore(STORES.suggestionLog);
+    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
     const suggestion = log.find((entry) => entry.suggestionId === req.params.id);
     if (!suggestion) {
       return res.status(404).json({ error: 'suggestion not found' });
@@ -234,21 +289,18 @@ app.post('/suggestions/:id/feedback', async (req, res) => {
     const feedbackAt = nowIso();
     suggestion.outcome = outcome;
     suggestion.feedbackAt = feedbackAt;
-    suggestion.delaySpan = delaySpan || null;
+    suggestion.delaySpan = delaySpan ?? null;
 
-    let newSilence = null;
-    if (outcome === 'accepted') {
-      newSilence = null;
-    } else {
-      const minutes = outcome === 'delayed' ? minutesForSpan(delaySpan) : minutesForSpan('long');
-      newSilence = new Date(Date.now() + minutes * 60 * 1000).toISOString();
-    }
+    const newSilence =
+      outcome === 'accepted'
+        ? null
+        : new Date(Date.now() + minutesForSpan(delaySpan) * 60 * 1000).toISOString();
 
     suggestion.silenceUntil = newSilence;
     await writeStore(STORES.suggestionLog, log);
 
-    const contextStore = await readStore(STORES.contextStore);
-    (suggestion.contextTags || []).forEach((tag) => {
+    const contextStore = await readStore<ContextEntry>(STORES.contextStore);
+    suggestion.contextTags.forEach((tag) => {
       let entry = contextStore.find((item) => item.contextTag === tag);
       if (!entry) {
         entry = {
@@ -277,19 +329,19 @@ app.post('/suggestions/:id/feedback', async (req, res) => {
 
     await clearActiveSuggestion(suggestion.relatedDecisionId, outcome);
 
-    const behaviorLog = await readStore(STORES.behaviorLog);
+    const behaviorLog = await readStore<BehaviorLogEntry>(STORES.behaviorLog);
     const deliveredAt = new Date(suggestion.deliveredAt).getTime();
     const latencyMs = Math.max(0, new Date(feedbackAt).getTime() - deliveredAt);
     behaviorLog.push({
       logId: makeId('beh'),
       suggestionId: suggestion.suggestionId,
       decisionId: suggestion.relatedDecisionId,
-      timeHorizon: suggestion.timeHorizon || 'short',
-      decisionType: suggestion.decisionType || 'task',
+      timeHorizon: suggestion.timeHorizon,
+      decisionType: suggestion.decisionType,
       latencyMs,
       userOutcome: outcome,
       followUpCompleted: outcome === 'accepted',
-      agentSuggestionOrigin: suggestion.triggerRule || 'agent'
+      agentSuggestionOrigin: suggestion.triggerRule
     });
     await writeStore(STORES.behaviorLog, behaviorLog);
 
@@ -300,12 +352,13 @@ app.post('/suggestions/:id/feedback', async (req, res) => {
   }
 });
 
-app.use((err, req, res, next) => {
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(500).json({ error: 'Server error' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT ?? 3000;
+
 ensureDataFiles()
   .then(() => {
     app.listen(PORT, () => {
