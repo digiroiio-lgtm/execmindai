@@ -3,8 +3,9 @@ import { GoogleProvider } from './GoogleProvider';
 import { LLMClient } from './LLMClient';
 import { OpenAIProvider } from './OpenAIProvider';
 import { XAIProvider } from './XAIProvider';
+import { AgentType as ConfigAgentType } from '../config/types';
 
-export type AgentType = 'planner' | 'suggestion';
+export type AgentType = ConfigAgentType;
 export type IntentFlags = {
   quiet?: boolean;
   budget?: 'low' | 'standard' | 'high';

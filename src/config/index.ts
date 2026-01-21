@@ -1,6 +1,6 @@
 import defaultConfig from './default';
 import devConfig from './dev';
-import prodConfig from './prod';
+import prodConfig, { productionLock } from './prod';
 import { Config, DeepPartial, Environment } from './types';
 
 const mergeDeep = <T>(target: T, source: DeepPartial<T>): T => {
@@ -31,9 +31,11 @@ const envOverrides: Record<Environment, DeepPartial<Config>> = {
 };
 
 const merged = mergeDeep(defaultConfig, envOverrides[environment] ?? {});
+const locked =
+  environment === 'production' ? mergeDeep(merged, productionLock ?? {}) : merged;
 
 const runtimeConfig: Config = {
-  ...merged,
+  ...locked,
   environment
 };
 

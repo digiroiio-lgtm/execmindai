@@ -1,4 +1,5 @@
 import { AgentType } from './ModelRouter';
+import config from '../config';
 
 export class GuardViolation extends Error {
   constructor(message: string, public readonly agent: AgentType) {
@@ -16,10 +17,10 @@ type GuardRule = {
 
 const guardRules: Record<AgentType, GuardRule> = {
   planner: {
-    maxTokens: 500
+    maxTokens: config.guard.maxOutputTokens.planner
   },
   suggestion: {
-    maxTokens: 150,
+    maxTokens: config.guard.maxOutputTokens.suggestion,
     maxSentences: 2,
     allowedCta: /\b(Follow up|Review|Delay)\b/gi,
     maxCtaMatches: 1

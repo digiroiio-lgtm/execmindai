@@ -8,10 +8,23 @@ import { initializeStores, contextStore, decisionLog } from './memory';
 import { DecisionBehaviorLog } from './types/data';
 import http from 'http';
 import { AddressInfo } from 'net';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.disable('x-powered-by');
+app.use(helmet());
+const suggestionRateLimiter = rateLimit({
+  windowMs: config.security.rateLimit.windowMs,
+  max: config.security.rateLimit.maxRequests,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+});
 app.use((req: Request, _res: Response, next: NextFunction) => {
   req.setTimeout(config.server.requestTimeoutMs);
   next();
@@ -305,36 +318,44 @@ interface SuggestionRequestBody {
   timeHorizon?: string;
 }
 
-app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res: Response) => {
-  try {
-    const result = await createSuggestion(req.body);
-    res.status(201).json(result);
-  } catch (err) {
-    if (err instanceof HttpError) {
-      return res.status(err.status).json({ error: err.message });
+app.post(
+  '/suggestions',
+  suggestionRateLimiter,
+  async (req: Request<{}, {}, SuggestionRequestBody>, res: Response) => {
+    try {
+      const result = await createSuggestion(req.body);
+      res.status(201).json(result);
+    } catch (err) {
+      if (err instanceof HttpError) {
+        return res.status(err.status).json({ error: err.message });
+      }
+      console.error(err);
+      res.status(500).json({ error: 'Failed to emit suggestion' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Failed to emit suggestion' });
   }
-});
+);
 
 interface SuggestionFeedbackBody {
   outcome: 'accepted' | 'delayed' | 'ignored';
   delaySpan?: DelaySpan;
 }
 
-app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, SuggestionFeedbackBody>, res: Response) => {
-  try {
-    const result = await submitSuggestionFeedback(req.params.id, req.body);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof HttpError) {
-      return res.status(err.status).json({ error: err.message });
+app.post(
+  '/suggestions/:id/feedback',
+  suggestionRateLimiter,
+  async (req: Request<{ id: string }, {}, SuggestionFeedbackBody>, res: Response) => {
+    try {
+      const result = await submitSuggestionFeedback(req.params.id, req.body);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof HttpError) {
+        return res.status(err.status).json({ error: err.message });
+      }
+      console.error(err);
+      res.status(500).json({ error: 'Failed to register feedback' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Failed to register feedback' });
   }
-});
+);
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);

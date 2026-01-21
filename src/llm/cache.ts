@@ -1,6 +1,7 @@
 import { AgentType } from './ModelRouter';
+import config from '../config';
 
-const TTL_MS = Number(process.env.SUGGESTION_CACHE_TTL_MS ?? 48 * 60 * 60 * 1000);
+const TTL_MS = config.cache.suggestionTtlMs;
 
 function normalizeVariables(vars: Record<string, unknown>) {
   const keys = Object.keys(vars).sort();
