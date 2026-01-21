@@ -36,7 +36,11 @@ This service is built with Express (`npm start`) and keeps JSON-backed stores in
 3. `npm run build` – transpiles `src/*.ts` into `dist/`.
 4. `npm start` – runs the compiled `dist/index.js`, which in turn initializes the suggestion service and keeps the SSE stream open.
 
-# Decision logging
+## Configuration
+
+* Copy `.env.example` to `.env` and populate the placeholders (LLM provider/model, API keys, feature flags, suggestion window sizes). The loader merges `src/config/default.ts` with `src/config/dev.ts` or `src/config/prod.ts` depending on `NODE_ENV`, so no values stay hardcoded.
+* The config loader feeds every runtime behavior: server port, timeouts, LLM provider, suggestion budgeting, momentum tuning, and feature flags for the background agent and suggestion broadcast.
+* The assistant agent and feedback handler read from this config (`config.featureFlags`, `config.suggestion.*`, etc.) before sending notifications or updating `silenceUntil`, ensuring environment-specific policies are respected.
 
 ## Decision logging
 

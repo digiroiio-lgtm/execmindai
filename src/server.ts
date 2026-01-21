@@ -2,10 +2,16 @@ import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
+import config from './config';
+import { DelaySpan } from './config/types';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  req.setTimeout(config.server.requestTimeoutMs);
+  next();
+});
 
 const DATA_DIR = path.resolve(__dirname, '../data');
 const STORES = {
@@ -34,7 +40,7 @@ interface SuggestionLogEntry {
   deliveredAt: string;
   outcome: 'accepted' | 'delayed' | 'ignored' | null;
   feedbackAt: string | null;
-  delaySpan: 'short' | 'medium' | 'long' | null;
+  delaySpan: DelaySpan | null;
   silenceUntil: string | null;
 }
 
@@ -69,6 +75,13 @@ interface BehaviorLogEntry {
 }
 
 const nowIso = () => new Date().toISOString();
+const contextRetentionMs = config.suggestion.contextRetentionHours * 60 * 60 * 1000;
+const suggestionBudgetMs = config.suggestion.suggestionBudgetWindowHours * 60 * 60 * 1000;
+const logVerbose = (...message: unknown[]) => {
+  if (config.featureFlags.enableVerboseLogging) {
+    console.log('[ExecMindAI]', ...message);
+  }
+};
 
 async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -98,13 +111,9 @@ function makeId(prefix = 'id') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function minutesForSpan(span?: 'short' | 'medium' | 'long') {
-  const mapping: Record<'short' | 'medium' | 'long', number> = {
-    short: 15,
-    medium: 60,
-    long: 240
-  };
-  return mapping[span ?? 'short'];
+function minutesForSpan(span?: DelaySpan) {
+  const key = span ?? 'short';
+  return config.suggestion.delayMinutes[key];
 }
 
 async function broadcastSuggestion(payload: SuggestionLogEntry) {
@@ -145,7 +154,7 @@ async function updateContextStore(contextTags: string[], suggestionId: string, r
 
     context.suggestionHistory = context.suggestionHistory.filter((item) => {
       const age = Date.now() - new Date(item.sentAt).getTime();
-      return age <= 48 * 60 * 60 * 1000;
+      return age <= contextRetentionMs;
     });
 
     context.suggestionHistory.push({ suggestionId, sentAt: now });
@@ -217,6 +226,11 @@ interface SuggestionRequestBody {
 
 app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res: Response) => {
   try {
+    if (!config.featureFlags.enableBackgroundAgent) {
+      logVerbose('Background agent disabled via config');
+      return res.status(503).json({ error: 'Background agent disabled' });
+    }
+
     const {
       relatedDecisionId,
       contextTags = [],
@@ -232,6 +246,18 @@ app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res
 
     if (!relatedDecisionId || !suggestionText) {
       return res.status(400).json({ error: 'relatedDecisionId and suggestionText are required' });
+    }
+
+    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
+    const windowStart = Date.now() - suggestionBudgetMs;
+    const recentCount = log.filter((entry) => {
+      const time = new Date(entry.deliveredAt).getTime();
+      return time >= windowStart;
+    }).length;
+
+    if (recentCount >= config.suggestion.dailyLimit) {
+      logVerbose('Daily suggestion budget hit', recentCount);
+      return res.status(429).json({ error: 'Daily suggestion budget reached' });
     }
 
     const suggestionId = makeId('sug');
@@ -255,14 +281,17 @@ app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res
       silenceUntil: null
     };
 
-    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
     log.push(entry);
     await writeStore(STORES.suggestionLog, log);
 
     await updateContextStore(contextTags, suggestionId, relatedDecisionId);
     await markDecisionForSuggestion(relatedDecisionId, suggestionId);
 
-    await broadcastSuggestion(entry);
+    if (config.featureFlags.enableSuggestionBroadcast) {
+      await broadcastSuggestion(entry);
+    } else {
+      logVerbose('Suggestion broadcast skipped (feature flag is off)');
+    }
 
     res.status(201).json({ suggestionId, deliveredAt });
   } catch (err) {
@@ -273,7 +302,7 @@ app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res
 
 interface SuggestionFeedbackBody {
   outcome: 'accepted' | 'delayed' | 'ignored';
-  delaySpan?: 'short' | 'medium' | 'long';
+  delaySpan?: DelaySpan;
 }
 
 app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, SuggestionFeedbackBody>, res: Response) => {
@@ -317,10 +346,16 @@ app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, Su
 
       if (outcome === 'accepted') {
         entry.silenceUntil = null;
-        entry.momentumScore = Math.max(0.1, (entry.momentumScore || 0.5) - 0.3);
+        entry.momentumScore = Math.max(
+          0.1,
+          (entry.momentumScore || 0.5) + config.suggestion.momentumGainOnAccept
+        );
       } else {
         entry.silenceUntil = newSilence;
-        entry.momentumScore = Math.min(5, (entry.momentumScore || 0) + 0.25);
+        entry.momentumScore = Math.min(
+          5,
+          (entry.momentumScore || 0) + config.suggestion.momentumGainOnIgnore
+        );
       }
 
       entry.lastMentionedAt = feedbackAt;
@@ -357,7 +392,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: 'Server error' });
 });
 
-const PORT = process.env.PORT ?? 3000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : config.server.port;
 
 ensureDataFiles()
   .then(() => {

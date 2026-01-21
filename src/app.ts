@@ -22,6 +22,6 @@ async function startSuggestionService() {
   serviceStarted = true;
   console.log('Starting suggestion service (SSE + feedback) …');
 
-  await import('./server.js');
+  await import('./server');
   console.log('Suggestion service available.');
 }
