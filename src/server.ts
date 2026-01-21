@@ -4,6 +4,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import config from './config';
 import { DelaySpan } from './config/types';
+import { initializeStores, contextStore, decisionLog } from './memory';
+import { DecisionBehaviorLog } from './types/data';
 
 const app = express();
 app.use(cors());
@@ -13,17 +15,13 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   next();
 });
 
+const suggestionClients = new Set<Response>();
+
 const DATA_DIR = path.resolve(__dirname, '../data');
-const STORES = {
-  decisionRecords: path.join(DATA_DIR, 'decision_records.json'),
-  contextStore: path.join(DATA_DIR, 'context_store.json'),
+const LOG_STORES = {
   suggestionLog: path.join(DATA_DIR, 'suggestion_log.json'),
   behaviorLog: path.join(DATA_DIR, 'decision_behavior_log.json')
 } as const;
-
-type StoreKey = keyof typeof STORES;
-
-const suggestionClients = new Set<Response>();
 
 interface SuggestionLogEntry {
   suggestionId: string;
@@ -43,39 +41,7 @@ interface SuggestionLogEntry {
   delaySpan: DelaySpan | null;
   silenceUntil: string | null;
 }
-
-interface ContextEntry {
-  contextTag: string;
-  lastMentionedAt: string;
-  relatedDecisions: string[];
-  momentumScore: number;
-  travelStatus: null | { location: string; startAt: string; endAt: string };
-  silenceUntil: string | null;
-  suggestionHistory: Array<{ suggestionId: string; sentAt: string }>;
-}
-
-interface DecisionRecord {
-  decisionId: string;
-  createdAt: string;
-  hasActiveSuggestion?: boolean;
-  lastSuggestionId?: string;
-  lastSuggestionOutcome?: string;
-}
-
-interface BehaviorLogEntry {
-  logId: string;
-  suggestionId: string;
-  decisionId: string;
-  timeHorizon: string;
-  decisionType: string;
-  latencyMs: number;
-  userOutcome: 'accepted' | 'delayed' | 'ignored';
-  followUpCompleted: boolean;
-  agentSuggestionOrigin: string;
-}
-
 const nowIso = () => new Date().toISOString();
-const contextRetentionMs = config.suggestion.contextRetentionHours * 60 * 60 * 1000;
 const suggestionBudgetMs = config.suggestion.suggestionBudgetWindowHours * 60 * 60 * 1000;
 const logVerbose = (...message: unknown[]) => {
   if (config.featureFlags.enableVerboseLogging) {
@@ -85,7 +51,7 @@ const logVerbose = (...message: unknown[]) => {
 
 async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  for (const file of Object.values(STORES)) {
+  for (const file of Object.values(LOG_STORES)) {
     try {
       await fs.access(file);
     } catch (err: unknown) {
@@ -123,72 +89,29 @@ async function broadcastSuggestion(payload: SuggestionLogEntry) {
   }
 }
 
-async function updateContextStore(contextTags: string[], suggestionId: string, relatedDecisionId: string) {
-  if (!contextTags.length) {
-    return;
-  }
+async function recordContextMentions(contextTags: string[], suggestionId: string, decisionId: string) {
+  await Promise.all(
+    contextTags.map((tag) =>
+      contextStore.bumpContext(tag, {
+        decisionId,
+        suggestionId
+      })
+    )
+  );
+}
 
-  const store = await readStore<ContextEntry>(STORES.contextStore);
-  const now = nowIso();
-
-  contextTags.forEach((tag) => {
-    let context = store.find((entry) => entry.contextTag === tag);
-    if (!context) {
-      context = {
-        contextTag: tag,
-        lastMentionedAt: now,
-        relatedDecisions: [],
-        momentumScore: 0,
-        travelStatus: null,
-        silenceUntil: null,
-        suggestionHistory: []
-      };
-      store.push(context);
-    }
-
-    context.lastMentionedAt = now;
-    context.momentumScore = Math.min(5, (context.momentumScore || 0) + 1);
-    if (!context.relatedDecisions.includes(relatedDecisionId)) {
-      context.relatedDecisions.push(relatedDecisionId);
-    }
-
-    context.suggestionHistory = context.suggestionHistory.filter((item) => {
-      const age = Date.now() - new Date(item.sentAt).getTime();
-      return age <= contextRetentionMs;
-    });
-
-    context.suggestionHistory.push({ suggestionId, sentAt: now });
+async function markDecisionActive(decisionId: string, suggestionId: string) {
+  await decisionLog.touch(decisionId, {
+    hasActiveSuggestion: true,
+    lastSuggestionId: suggestionId
   });
-
-  await writeStore(STORES.contextStore, store);
 }
 
-async function markDecisionForSuggestion(decisionId: string, suggestionId: string) {
-  const records = await readStore<DecisionRecord>(STORES.decisionRecords);
-  let record = records.find((entry) => entry.decisionId === decisionId);
-  if (!record) {
-    record = {
-      decisionId,
-      createdAt: nowIso(),
-      hasActiveSuggestion: true,
-      lastSuggestionId: suggestionId
-    };
-    records.push(record);
-  } else {
-    record.hasActiveSuggestion = true;
-    record.lastSuggestionId = suggestionId;
-  }
-  await writeStore(STORES.decisionRecords, records);
-}
-
-async function clearActiveSuggestion(decisionId: string, outcome: string) {
-  const records = await readStore<DecisionRecord>(STORES.decisionRecords);
-  const record = records.find((entry) => entry.decisionId === decisionId);
-  if (record) {
-    record.hasActiveSuggestion = false;
-    record.lastSuggestionOutcome = outcome;
-  }
-  await writeStore(STORES.decisionRecords, records);
+async function clearDecisionSuggestion(decisionId: string, outcome: string) {
+  await decisionLog.touch(decisionId, {
+    hasActiveSuggestion: false,
+    lastSuggestionOutcome: outcome
+  });
 }
 
 app.get('/health', (_req: Request, res: Response) => {
@@ -248,7 +171,7 @@ app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res
       return res.status(400).json({ error: 'relatedDecisionId and suggestionText are required' });
     }
 
-    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
+    const log = await readStore<SuggestionLogEntry>(LOG_STORES.suggestionLog);
     const windowStart = Date.now() - suggestionBudgetMs;
     const recentCount = log.filter((entry) => {
       const time = new Date(entry.deliveredAt).getTime();
@@ -282,10 +205,10 @@ app.post('/suggestions', async (req: Request<{}, {}, SuggestionRequestBody>, res
     };
 
     log.push(entry);
-    await writeStore(STORES.suggestionLog, log);
+    await writeStore(LOG_STORES.suggestionLog, log);
 
-    await updateContextStore(contextTags, suggestionId, relatedDecisionId);
-    await markDecisionForSuggestion(relatedDecisionId, suggestionId);
+    await recordContextMentions(contextTags, suggestionId, relatedDecisionId);
+    await markDecisionActive(relatedDecisionId, suggestionId);
 
     if (config.featureFlags.enableSuggestionBroadcast) {
       await broadcastSuggestion(entry);
@@ -309,7 +232,7 @@ app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, Su
   try {
     const { outcome, delaySpan } = req.body;
 
-    const log = await readStore<SuggestionLogEntry>(STORES.suggestionLog);
+    const log = await readStore<SuggestionLogEntry>(LOG_STORES.suggestionLog);
     const suggestion = log.find((entry) => entry.suggestionId === req.params.id);
     if (!suggestion) {
       return res.status(404).json({ error: 'suggestion not found' });
@@ -326,45 +249,27 @@ app.post('/suggestions/:id/feedback', async (req: Request<{ id: string }, {}, Su
         : new Date(Date.now() + minutesForSpan(delaySpan) * 60 * 1000).toISOString();
 
     suggestion.silenceUntil = newSilence;
-    await writeStore(STORES.suggestionLog, log);
+    await writeStore(LOG_STORES.suggestionLog, log);
 
-    const contextStore = await readStore<ContextEntry>(STORES.contextStore);
-    suggestion.contextTags.forEach((tag) => {
-      let entry = contextStore.find((item) => item.contextTag === tag);
-      if (!entry) {
-        entry = {
-          contextTag: tag,
-          lastMentionedAt: feedbackAt,
-          relatedDecisions: [],
-          momentumScore: 0,
-          travelStatus: null,
-          silenceUntil: null,
-          suggestionHistory: []
-        };
-        contextStore.push(entry);
-      }
+    await Promise.all(
+      suggestion.contextTags.map(async (tag) => {
+        if (!contextStore.find(tag)) {
+          await contextStore.bumpContext(tag, { decisionId: suggestion.relatedDecisionId });
+        }
 
-      if (outcome === 'accepted') {
-        entry.silenceUntil = null;
-        entry.momentumScore = Math.max(
-          0.1,
-          (entry.momentumScore || 0.5) + config.suggestion.momentumGainOnAccept
-        );
-      } else {
-        entry.silenceUntil = newSilence;
-        entry.momentumScore = Math.min(
-          5,
-          (entry.momentumScore || 0) + config.suggestion.momentumGainOnIgnore
-        );
-      }
+        if (outcome === 'accepted') {
+          await contextStore.adjustMomentum(tag, config.suggestion.momentumGainOnAccept);
+          await contextStore.setSilence(tag, null);
+        } else {
+          await contextStore.adjustMomentum(tag, config.suggestion.momentumGainOnIgnore);
+          await contextStore.setSilence(tag, newSilence);
+        }
+      })
+    );
 
-      entry.lastMentionedAt = feedbackAt;
-    });
-    await writeStore(STORES.contextStore, contextStore);
+    await clearDecisionSuggestion(suggestion.relatedDecisionId, outcome);
 
-    await clearActiveSuggestion(suggestion.relatedDecisionId, outcome);
-
-    const behaviorLog = await readStore<BehaviorLogEntry>(STORES.behaviorLog);
+    const behaviorLog = await readStore<DecisionBehaviorLog>(LOG_STORES.behaviorLog);
     const deliveredAt = new Date(suggestion.deliveredAt).getTime();
     const latencyMs = Math.max(0, new Date(feedbackAt).getTime() - deliveredAt);
     behaviorLog.push({
@@ -394,13 +299,13 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : config.server.port;
 
-ensureDataFiles()
+Promise.all([initializeStores(), ensureDataFiles()])
   .then(() => {
     app.listen(PORT, () => {
       console.log(`ExecMindAI suggestion service listening on http://localhost:${PORT}`);
     });
   })
   .catch((err) => {
-    console.error('Failed to initialize data stores', err);
+    console.error('Failed to initialize stores', err);
     process.exit(1);
   });
