@@ -1,0 +1,17 @@
+{
+  "name": "execmindai-service",
+  "version": "0.1.0",
+  "description": "ExecMindAI assistant suggestion event bus and feedback service",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "build": "node -e \"console.log('nothing to build yet')\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  }
+}
