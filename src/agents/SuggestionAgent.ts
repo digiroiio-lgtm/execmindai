@@ -1,4 +1,4 @@
-import { BaseAgent } from './BaseAgent';
+import { AgentContext, BaseAgent } from './BaseAgent';
 import { PromptId } from '../prompts/prompt-registry';
 import { contextStore, decisionLog } from '../memory';
 
@@ -9,6 +9,10 @@ export interface SuggestionInput {
 }
 
 export class SuggestionAgent extends BaseAgent {
+  constructor(context: AgentContext) {
+    super(context, undefined, 'suggestion');
+  }
+
   async run(input: SuggestionInput): Promise<string> {
     await this.initialize();
     const contextSnapshot = contextStore.snapshot();
@@ -27,10 +31,18 @@ export class SuggestionAgent extends BaseAgent {
             .join('; ')
         : 'no decisions logged';
 
-    return this.invokePrompt('suggestion_generation' as PromptId, {
-      context: contextSummary,
-      decisions: decisionSummary,
-      travel: input.travelWindows?.join(', ') ?? 'no travel window detected'
-    });
+    return this.invokePrompt(
+      'suggestion_generation' as PromptId,
+      {
+        context: contextSummary,
+        decisions: decisionSummary,
+        travel: input.travelWindows?.join(', ') ?? 'no travel window detected'
+      },
+      {
+        quiet: true,
+        budget: 'low',
+        depth: 'medium'
+      }
+    );
   }
 }

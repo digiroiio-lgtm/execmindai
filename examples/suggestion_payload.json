@@ -1,0 +1,12 @@
+{
+  "relatedDecisionId": "dec-20251002-ixgh",
+  "contextTags": ["Boston-travel", "fundraising"],
+  "suggestionText": "Boston yatırım turunuz sırasında 10 Mayıs’ta bir yatırımcı akşamı var; istersen 9-11 arasında serbest vaktine uygun precall ayarlayayım.",
+  "toneHint": "gentle",
+  "ctaOptions": ["follow_up", "review"],
+  "triggerRule": "travel_opportunity",
+  "confidence": 0.81,
+  "syncAction": "prepareDraftInvite",
+  "decisionType": "meeting",
+  "timeHorizon": "short"
+}

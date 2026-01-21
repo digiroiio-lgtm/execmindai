@@ -1,0 +1,25 @@
+{
+  "decisionId": "dec-20251002-ixgh",
+  "decisionType": "meeting",
+  "primaryTime": "2025-10-02T14:00:00.000Z",
+  "timeWindow": {
+    "start": "2025-10-02T14:00:00.000Z",
+    "end": "2025-10-02T15:00:00.000Z"
+  },
+  "description": "Yatırımcı görüşmesi (Hüseyin) + sağlık follow-up",
+  "rawText": "Yarın 14:00'te Hüseyin’le İstanbul’da yatırımcı toplantısı. 16:30’da sağlık danışmanı arayacağım. Boston seyahatinde 10 Mayıs’taki finansör akşamı uygun gözüküyor.",
+  "participants": ["Hüseyin", "Yatırımcı"],
+  "priorityHint": "high",
+  "confidence": 0.92,
+  "status": "proposed",
+  "proposedAction": "calendarEvent-456",
+  "contextSnapshot": {
+    "contextTags": ["Boston-travel", "fundraising"],
+    "travelStatus": {
+      "location": "Boston",
+      "startAt": "2025-05-08T00:00:00.000Z",
+      "endAt": "2025-05-12T00:00:00.000Z"
+    }
+  },
+  "createdAt": "2025-04-29T09:13:00.000Z"
+}
