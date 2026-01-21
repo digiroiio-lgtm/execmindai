@@ -29,6 +29,15 @@ The Phase 1 service layer emits assistant suggestions via an SSE stream and capt
 
 This service is built with Express (`npm start`) and keeps JSON-backed stores in `data/` that the parser, UI, and agent can inspect for the next suggestion cycle.
 
+## How to Run
+
+1. `npm install` (installs `express`, `cors`, and the TypeScript tooling).
+2. `npm run dev` – boots the TypeScript entry point with `ts-node-dev` so you can iterate without compiling.
+3. `npm run build` – transpiles `src/*.ts` into `dist/`.
+4. `npm start` – runs the compiled `dist/index.js`, which in turn initializes the suggestion service and keeps the SSE stream open.
+
+# Decision logging
+
 ## Decision logging
 
 ExecMindAI logs decision behavior (time horizon, type, latency, accept/delay/ignore, follow-up completion) while avoiding raw personal text or sensitive detail. This becomes strategic intelligence without violating privacy.
