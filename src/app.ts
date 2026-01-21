@@ -1,3 +1,5 @@
+import { validateEnv } from './config/validateEnv';
+
 let serviceStarted = false;
 
 const FLOW_REFERENCE = 'FLOW.md';
@@ -7,6 +9,7 @@ const FLOW_REFERENCE = 'FLOW.md';
  * existing suggestion service starts exactly once.
  */
 export async function bootstrapSystem() {
+  validateEnv();
   console.log('Initializing ExecMindAI execution skeleton…');
   console.log(`Referencing decision flow: ${FLOW_REFERENCE}`);
 

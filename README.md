@@ -1,5 +1,7 @@
 # ExecMindAI — Executive Decision Engine
 
+![CI](https://github.com/digiroiio-lgtm/execmindai/actions/workflows/ci.yml/badge.svg)
+
 ExecMindAI is an AI-powered decision and prioritization engine for busy executives. It turns scattered thoughts and spoken or written moments of intention into structured, time-aware decisions so leaders can stop juggling mental clutter and focus on what matters.
 
 ## Core value
